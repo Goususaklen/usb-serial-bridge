@@ -73,7 +73,14 @@ public class UsbSerialBridgeService extends Service {
     private int baudRate = DEFAULT_BAUD_RATE;
 
     private LocalServerSocket localSocket;
-    private final ExecutorService ioPool = Executors.newCachedThreadPool();
+    private ExecutorService ioPool;
+
+    private synchronized ExecutorService ensureIoPool() {
+        if (ioPool == null || ioPool.isShutdown() || ioPool.isTerminated()) {
+            ioPool = Executors.newCachedThreadPool();
+        }
+        return ioPool;
+    }
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     // ── Broadcast Receivers ────────────────────────────────────────────
@@ -254,7 +261,10 @@ public class UsbSerialBridgeService extends Service {
 
         closeSerialPort();
         closeLocalSockets();
-        ioPool.shutdownNow();
+        if (ioPool != null) {
+            ioPool.shutdownNow();
+            ioPool = null;
+        }
 
         updateNotification("Stopped");
         broadcastStatus("stopped", "Bridge stopped");
@@ -334,7 +344,7 @@ public class UsbSerialBridgeService extends Service {
             localSocket = new LocalServerSocket(LOCAL_SOCKET_NAME);
             Log.i(TAG, "Local socket listening on: @" + LOCAL_SOCKET_NAME);
             broadcastStatus("listening", "Bridge ready on @" + LOCAL_SOCKET_NAME);
-            ioPool.submit(this::acceptLoop);
+            ensureIoPool().submit(this::acceptLoop);
         } catch (IOException e) {
             Log.e(TAG, "Failed to create local socket server", e);
             broadcastStatus("error", "Failed to create bridge socket: " + e.getMessage());
@@ -358,7 +368,7 @@ public class UsbSerialBridgeService extends Service {
             try {
                 LocalSocket client = localSocket.accept();
                 Log.d(TAG, "Client connected");
-                ioPool.submit(() -> handleClient(client));
+                ensureIoPool().submit(() -> handleClient(client));
             } catch (IOException e) {
                 if (running.get()) {
                     Log.e(TAG, "Accept error", e);
@@ -384,7 +394,7 @@ public class UsbSerialBridgeService extends Service {
                     "Driver: %s\nDevice: %s\nConfig: %d %dN1\nREADY\n",
                     serialDriver != null ? serialDriver.getClass().getSimpleName().replace("SerialDriver", "") : "?",
                     usbDevice != null ? formatVidPid(usbDevice) : "?",
-                    baudRate);
+                    baudRate, DEFAULT_DATA_BITS);
             clientOut.write(banner.getBytes());
             clientOut.flush();
 
